@@ -1,0 +1,52 @@
+#version: '3.9'
+
+services:
+  backend:
+    build: ./backend
+    container_name: affiliate_backend
+    command: >
+      bash -c "python manage.py migrate &&
+               python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  frontend:
+    build: ./frontend
+    container_name: affiysan_frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    stdin_open: true
+    tty: true
+
+  db:
+    image: postgres:15
+    container_name: affiysan_db
+    restart: always
+    environment:
+      POSTGRES_USER: affiysan
+      POSTGRES_PASSWORD: affiysan
+      POSTGRES_DB: affiysan_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    container_name: affiysan_redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:

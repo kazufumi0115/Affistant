@@ -1,0 +1,48 @@
+```mermaid
+erDiagram
+    KEYWORD ||--o{ EXTRACTION_RUN : has
+    EXTRACTION_RUN ||--o{ SEARCH_RESULT : contains
+    SEARCH_RESULT }o--|| MEDIA_SITE : belongs_to
+
+    KEYWORD {
+        int id PK
+        string text
+        string search_engine
+        string region
+        int top_n
+        bool is_active
+        datetime created_at
+    }
+
+    EXTRACTION_RUN {
+        int id PK
+        int keyword_id FK
+        datetime started_at
+        datetime finished_at
+        string status
+        json raw_response
+        datetime created_at
+    }
+
+    SEARCH_RESULT {
+        int id PK
+        int run_id FK
+        int keyword_id FK
+        int position
+        bool is_ad
+        string url
+        string domain
+        string title
+        text snippet
+        json metrics
+        datetime fetched_at
+    }
+
+    MEDIA_SITE {
+        int id PK
+        string domain
+        string title
+        string site_type
+        datetime last_seen
+        json metadata
+    }

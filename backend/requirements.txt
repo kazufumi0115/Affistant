@@ -1,0 +1,9 @@
+Django>=5.0
+djangorestframework
+psycopg[binary]
+django-environ
+django-cors-headers
+celery
+redis
+drf-spectacular
+drf-spectacular-sidecar  # Swagger UI/Redocを同梱
