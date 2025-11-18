@@ -16,18 +16,21 @@ import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-env = environ.Env(DEBUG=(bool, False))
-environ.Env.read_env(os.path.join(BASE_DIR.parent, ".env"))
 
+env_file_path = BASE_DIR.parent / ".env"
+if env_file_path.exists():
+    environ.Env.read_env(str(env_file_path))
+
+env = environ.Env(DEBUG=(bool, False))
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env("SECRET_KEY")
+SECRET_KEY = env("SECRET_KEY", default="django-insecure-default-key-for-dev")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env("DEBUG")
+DEBUG = env("DEBUG", default=False)
 
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS")
 
@@ -42,8 +45,10 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "rest_framework.authtoken",
     "corsheaders",
     "tracking",
+    "users",
     "drf_spectacular",
     "drf_spectacular_sidecar",  # swagger ui / redoc assets
 ]
@@ -83,7 +88,7 @@ WSGI_APPLICATION = "affiysan_core.wsgi.application"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    "default": env.db(),
+    "default": env.db("DATABASE_URL"),
 }
 
 
@@ -109,9 +114,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "ja"  # 日本語に変更
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Tokyo"  # タイムゾーンを東京に変更
 
 USE_I18N = True
 
@@ -132,9 +137,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CELERY_BROKER_URL = env("REDIS_URL")
 CELERY_RESULT_BACKEND = env("REDIS_URL")
 
+# === DRF (Django REST Framework) の設定 ===
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # ★ 修正: デフォルトの認証クラスを TokenAuthentication に設定
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",
+    ],
+    # ★ 修正: デフォルトの権限を IsAuthenticated (認証済みのみ) に設定
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
 }
+
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "アフィーさん API",
@@ -142,3 +157,7 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# === カスタムユーザーモデルの設定 ===
+# Djangoに対して、このモデルを認証に使用するように指示
+AUTH_USER_MODEL = "users.User"

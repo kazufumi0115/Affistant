@@ -1,12 +1,12 @@
-#version: '3.9'
+version: '3.9'
 
 services:
   backend:
     build: ./backend
     container_name: affiliate_backend
-    command: >
-      bash -c "python manage.py migrate &&
-               python manage.py runserver 0.0.0.0:8000"
+    working_dir: /app
+    # Django Webサーバーの起動
+    command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - ./backend:/app
     ports:
@@ -14,8 +14,10 @@ services:
     env_file:
       - .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy # DBが準備完了になるまで待機
+      redis:
+        condition: service_healthy # Redisが準備完了になるまで待機
 
   frontend:
     build: ./frontend
@@ -28,25 +30,73 @@ services:
       CHOKIDAR_USEPOLLING: "true"
     stdin_open: true
     tty: true
+    depends_on:
+      - backend # backendが起動してからfrontendを起動
 
   db:
     image: postgres:15
     container_name: affiysan_db
     restart: always
     environment:
-      POSTGRES_USER: affiysan
-      POSTGRES_PASSWORD: affiysan
-      POSTGRES_DB: affiysan_db
+      POSTGRES_USER: ${POSTGRES_USER:-affiysan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-affiysan}
+      POSTGRES_DB: ${POSTGRES_DB:-affiysan_db}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      # DBがSQLを受け付けられるか確認
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-affiysan} -d ${POSTGRES_DB:-affiysan_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7
     container_name: affiysan_redis
     ports:
       - "6379:6379"
+    healthcheck:
+      # Redisがpingに応答するか確認
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- ▼ Celeryタスク実行用ワーカー ▼ ---
+  celery_worker:
+    build: ./backend
+    container_name: affiysan_celery_worker
+    working_dir: /app
+    # Celeryワーカーを起動 (affiysan_core は settings.py があるプロジェクト名)
+    command: celery -A affiysan_core worker --loglevel=info
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # --- ▼ Celery定期タスク実行用スケジューラ ▼ ---
+  celery_beat:
+    build: ./backend
+    container_name: affiysan_celery_beat
+    working_dir: /app
+    # Celery Beat (スケジューラ) を起動
+    command: celery -A affiysan_core beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:

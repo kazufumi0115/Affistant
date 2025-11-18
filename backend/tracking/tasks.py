@@ -1,45 +1,66 @@
 from celery import shared_task
-from .models import ExtractionRun, SearchResult, MediaSite, Keyword
-from django.utils import timezone
-from urllib.parse import urlparse
+from .models import ExtractionRun, Keyword, SearchResult, MediaSite
+
+# (注: スクレイピングロジック（bs4, requests）もここでインポートします)
 import requests
 from bs4 import BeautifulSoup
 
 
 @shared_task(bind=True)
-def enqueue_extraction_for_keyword(self, run_id):
+def enqueue_extraction_for_keyword(self, run_id, keyword_id):
+    """
+    Celeryワーカーが実行するタスク。
+    単一のExtractionRunと単一のKeyword IDを受け取り、
+    スクレイピングを実行して SearchResult を保存する。
+    """
     try:
         run = ExtractionRun.objects.get(id=run_id)
-        run.status = "running"
-        run.started_at = timezone.now()
-        run.save()
+        keyword = Keyword.objects.get(id=keyword_id)
 
-        keyword = run.keyword
-        # --- ここから実装する検索ロジック ---
-        # 注意: Google の直接スクレイピングはTOSの問題やブロックがあるため
-        # 実運用では SerpAPI 等のサードパーティを使うか、プロキシ/レート制御 を行うこと。
-        query = keyword.text
-        top_n = keyword.top_n
+        # 実行ステータスを 'running' に更新
+        # (注: 複数のワーカーが同時に status を更新しようとする競合が
+        # 発生しうるため、run全体のステータス更新はタスク呼び出し側で行う方が安全かもしれません)
+        # ここではタスク開始のログとして残します
+        print(f"Task started for: run_id={run_id}, keyword='{keyword.text}'")
 
-        # Example: use SERP API (pseudocode)
-        # response = call_serp_api(query, top_n, region=keyword.region)
-        # run.raw_response = response
-        # for idx, item in enumerate(response['organic_results'], start=1):
-        #     domain = urlparse(item['link']).netloc
-        #     SearchResult.objects.create(
-        #         run=run, keyword=keyword, position=idx,
-        #         is_ad=False, url=item['link'], domain=domain,
-        #         title=item.get('title'), snippet=item.get('snippet')
-        #     )
-        #
-        # For MVP demo, we can fallback to a VERY simple scraping or mock.
+        # === スクレイピングロジック (ダミー) ===
+        # (要件定義: ①-5, A〜Gの情報を取得)
+        # ここに requests と bs4 を使ったGoogle検索結果の
+        # スクレイピングロジックを実装します。
 
-        run.status = "success"
-        run.finished_at = timezone.now()
-        run.save()
+        # (ダミーの検索結果)
+        dummy_rank = 1
+        dummy_url = f"https://example-media.com/{keyword.text.replace(' ', '-')}"
+        dummy_title = f"【1位】{keyword.text} のおすすめ！"
+
+        # MediaSiteモデルはドメインで管理
+        media_site, _ = MediaSite.objects.get_or_create(domain="example-media.com", defaults={"name": "Example Media"})
+
+        # SearchResultを保存
+        search_result = SearchResult.objects.create(
+            run=run, keyword=keyword, media_site=media_site, rank=dummy_rank, page_url=dummy_url, title=dummy_title
+        )
+        # (この後、AffiliateLinkモデルも保存)
+
+        # === スクレイピングロジック完了 ===
+
+        # (注: run全体のステータス更新は、全タスクの完了を
+        # 監視する別のメカニズムが必要です。
+        # ここでは個別のタスク成功として扱います。)
+
+        print(f"Task completed for: {keyword.text}")
+        return f"Success: {keyword.text}"
+
+    except Keyword.DoesNotExist:
+        return f"Error: Keyword {keyword_id} not found."
+    except ExtractionRun.DoesNotExist:
+        return f"Error: ExtractionRun {run_id} not found."
     except Exception as e:
-        run.status = "failed"
-        run.note = str(e)
-        run.finished_at = timezone.now()
-        run.save()
-        raise
+        # エラーが発生した場合、タスクをリトライ
+        self.retry(exc=e, countdown=60)
+        return f"Error: {str(e)}"
+
+
+# (注: Celeryがこのファイルを見つけられるように、
+# affiysan_core/celery.py や settings.py の設定が
+# 正しく行われているか確認してください)
