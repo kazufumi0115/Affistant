@@ -1,3 +1,7 @@
+import csv
+import openpyxl  # Excel生成用
+from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -10,161 +14,212 @@ from .serializers import (
     ExtractionRunSerializer,
     SearchResultSerializer,
 )
-
-# ユーザーが定義したCeleryタスクをインポート
 from .tasks import enqueue_extraction_for_keyword
-
-# === ベースビューセット（認証・オーナー権限） ===
 
 
 class BaseOwnerViewSet(viewsets.ModelViewSet):
-    """
-    オーナー（認証済みユーザー）に紐づくデータのみを操作可能にする
-    ベースビューセット。
-    """
-
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        """
-        認証済みユーザーがオーナーであるオブジェクトのみを返す。
-        (self.queryset は継承先で .all() が設定されている前提)
-        """
         return self.queryset.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
-        """
-        作成時にオーナーを認証済みユーザーに自動設定する。
-        """
         serializer.save(owner=self.request.user)
 
 
-# === フォルダ管理 (要件 ①-2) ===
-
-
 class GenreViewSet(BaseOwnerViewSet):
-    """
-    API endpoint for Genres (ジャンル).
-    オーナーに紐づくジャンルのみを操作可能。
-    """
-
     queryset = Genre.objects.all()
     serializer_class = GenreSerializer
 
 
 class ProjectViewSet(BaseOwnerViewSet):
-    """
-    API endpoint for Projects (案件).
-    オーナーに紐づく案件のみを操作可能。
-    """
-
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
 
     @action(detail=True, methods=["post"])
     def extract(self, request, pk=None):
-        """
-        特定のプロジェクト（案件）に紐づく全てのキーワードの
-        SEO分析タスク（Celery）をキューに追加します。
-        """
-        # get_object() は BaseOwnerViewSet の get_queryset() を
-        # 経由するため、オーナーのプロジェクトでなければ 404 となり安全です。
         project = self.get_object()
 
-        # 1. このプロジェクトの「実行履歴（Run）」を1件作成
-        # (注: ExtractionRunモデルは 'project' FK を持つ前提)
-        run = ExtractionRun.objects.create(
-            project=project,
-            status="pending",
-            # max_rank は request.data から受け取ることも可能
-            # max_rank=request.data.get('max_rank', 50)
-        )
+        # 1. キーワード登録
+        raw_keywords = request.data.get("keywords", "")
+        max_rank = request.data.get("max_rank", 10)
 
-        # 2. このプロジェクトに属する全てのキーワードを取得
+        if raw_keywords:
+            keyword_list = [k.strip() for k in raw_keywords.split("\n") if k.strip()]
+            for k_text in keyword_list:
+                Keyword.objects.get_or_create(project=project, text=k_text)
+
+        # 2. キーワード取得
         keywords = project.keywords.all()
-        if not keywords.exists():
-            return Response(
-                {"error": "このプロジェクトにはキーワードが登録されていません。"}, status=status.HTTP_400_BAD_REQUEST
-            )
 
-        # 3. 各キーワードについてCeleryタスクをエンキュー
-        # (注: タスク側は (run_id, keyword_id) を受け取れるように修正が必要)
+        if not keywords.exists():
+            return Response({"error": "キーワードが登録されていません。"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. 実行履歴作成
+        run = ExtractionRun.objects.create(project=project, status="pending", max_rank=max_rank)
+
+        # 4. タスク実行
         for keyword in keywords:
-            # (注) ユーザーが定義したタスク名が `enqueue_extraction_for_keyword`
-            # だったので、それに合わせています。
             enqueue_extraction_for_keyword.delay(run.id, keyword.id)
 
         return Response(
-            {"run_id": run.id, "status": run.status, "task_count": keywords.count()}, status=status.HTTP_202_ACCEPTED
+            {
+                "run_id": run.id,
+                "status": run.status,
+                "task_count": keywords.count(),
+                "message": f"{keywords.count()}件のキーワードで検索を開始しました。",
+            },
+            status=status.HTTP_202_ACCEPTED,
         )
 
+    @action(detail=True, methods=["get"])
+    def export_csv(self, request, pk=None):
+        project = self.get_object()
 
-# === SEO分析 (要件 ①-3〜) ===
+        response = HttpResponse(content_type="text/csv; charset=utf-8-sig")
+        filename = f"{project.name}_seo_results.csv"
+        response["Content-Disposition"] = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
+
+        writer = csv.writer(response)
+        header = [
+            "キーワード",
+            "月間検索ボリューム",
+            "検索日時",
+            "メディア名",
+            "SEO順位",
+            "掲載記事リンク",
+            "アフィリエイトリンク詳細",
+        ]
+        writer.writerow(header)
+
+        results = (
+            SearchResult.objects.filter(run__project=project, rank__gt=0)
+            .select_related("keyword", "run", "media_site")
+            .prefetch_related("affiliate_links")
+            .order_by("-run__executed_at", "keyword__text", "rank")
+        )
+
+        for result in results:
+            aff_links_list = []
+            for link in result.affiliate_links.all():
+                asp = link.asp_name or "不明"
+                product = link.product_name or "不明"
+                aff_links_list.append(f"[{asp}: {product}] {link.link_url}")
+
+            aff_links_text = "\n".join(aff_links_list) if aff_links_list else "なし"
+
+            local_executed_at = timezone.localtime(result.run.executed_at)
+
+            row = [
+                result.keyword.text,
+                result.keyword.search_volume or 0,
+                local_executed_at.strftime("%Y-%m-%d %H:%M"),
+                result.media_site.name or result.media_site.domain,
+                result.rank,
+                result.page_url,
+                aff_links_text,
+            ]
+            writer.writerow(row)
+
+        return response
+
+    # === Excel出力機能 ===
+    @action(detail=True, methods=["get"])
+    def export_excel(self, request, pk=None):
+        project = self.get_object()
+
+        response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        filename = f"{project.name}_seo_results.xlsx"
+        response["Content-Disposition"] = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SEO Results"
+
+        header = [
+            "キーワード",
+            "月間検索ボリューム",
+            "検索日時",
+            "メディア名",
+            "SEO順位",
+            "掲載記事リンク",
+            "アフィリエイトリンク詳細",
+        ]
+        ws.append(header)
+
+        results = (
+            SearchResult.objects.filter(run__project=project, rank__gt=0)
+            .select_related("keyword", "run", "media_site")
+            .prefetch_related("affiliate_links")
+            .order_by("-run__executed_at", "keyword__text", "rank")
+        )
+
+        for result in results:
+            aff_links_list = []
+            for link in result.affiliate_links.all():
+                asp = link.asp_name or "不明"
+                product = link.product_name or "不明"
+                aff_links_list.append(f"[{asp}: {product}] {link.link_url}")
+
+            aff_links_text = "\n".join(aff_links_list) if aff_links_list else "なし"
+
+            local_executed_at = timezone.localtime(result.run.executed_at)
+
+            row = [
+                result.keyword.text,
+                result.keyword.search_volume or 0,
+                local_executed_at.strftime("%Y-%m-%d %H:%M"),
+                result.media_site.name or result.media_site.domain,
+                result.rank,
+                result.page_url,
+                aff_links_text,
+            ]
+            ws.append(row)
+
+        wb.save(response)
+        return response
+
+    @action(detail=True, methods=["post"])
+    def clear_data(self, request, pk=None):
+        project = self.get_object()
+        run_count = project.runs.count()
+        project.runs.all().delete()
+
+        return Response({"message": f"{run_count}件の検索履歴を削除しました。"}, status=status.HTTP_200_OK)
 
 
+# ... (KeywordViewSet等は変更なし) ...
 class KeywordViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint for Keywords (キーワード).
-    """
-
     queryset = Keyword.objects.all()
     serializer_class = KeywordSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        """
-        認証済みユーザーのプロジェクトに紐づくキーワードのみを返す。
-        """
         user = self.request.user
-        # project__owner を使って、オーナーのプロジェクトのキーワードのみをフィルタ
         return Keyword.objects.filter(project__owner=user)
-
-    # perform_create は ModelViewSet のデフォルトを使用。
-    # Serializer側で project がオーナーのものか検証するのが望ましいが、
-    # 読み取り（get_queryset）がフィルタされているため、
-    # 他人のキーワードを作成・編集しても自分には見えない。
 
 
 class MediaSiteViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint for Media Sites (メディアサイト).
-    これは全ユーザー共通データとするため、オーナーチェックはしない。
-    """
-
     queryset = MediaSite.objects.all()
     serializer_class = MediaSiteSerializer
-    permission_classes = [permissions.IsAuthenticated]  # 認証は必要
+    permission_classes = [permissions.IsAuthenticated]
 
 
 class ExtractionRunViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint for Extraction Runs (検索実行履歴).
-    """
-
     queryset = ExtractionRun.objects.all()
     serializer_class = ExtractionRunSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        """
-        認証済みユーザーのプロジェクトに紐づく実行履歴のみを返す。
-        """
         user = self.request.user
         return ExtractionRun.objects.filter(project__owner=user)
 
 
 class SearchResultViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint for Search Results (検索結果).
-    """
-
     queryset = SearchResult.objects.all()
     serializer_class = SearchResultSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        """
-        認証済みユーザーの実行履歴に紐づく検索結果のみを返す。
-        """
         user = self.request.user
         return SearchResult.objects.filter(run__project__owner=user)

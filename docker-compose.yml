@@ -3,7 +3,7 @@ version: '3.9'
 services:
   backend:
     build: ./backend
-    container_name: affiliate_backend
+    container_name: affistant_backend
     working_dir: /app
     # Django Webサーバーの起動
     command: python manage.py runserver 0.0.0.0:8000
@@ -15,13 +15,13 @@ services:
       - .env
     depends_on:
       db:
-        condition: service_healthy # DBが準備完了になるまで待機
+        condition: service_healthy
       redis:
-        condition: service_healthy # Redisが準備完了になるまで待機
+        condition: service_healthy
 
   frontend:
     build: ./frontend
-    container_name: affiysan_frontend
+    container_name: affistant_frontend
     ports:
       - "3000:3000"
     volumes:
@@ -31,46 +31,42 @@ services:
     stdin_open: true
     tty: true
     depends_on:
-      - backend # backendが起動してからfrontendを起動
+      - backend
 
   db:
     image: postgres:15
-    container_name: affiysan_db
+    container_name: affistant_db # 修正
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-affiysan}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-affiysan}
-      POSTGRES_DB: ${POSTGRES_DB:-affiysan_db}
+      POSTGRES_USER: ${POSTGRES_USER:-affistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-affistant}
+      POSTGRES_DB: ${POSTGRES_DB:-affistant_db}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      # DBがSQLを受け付けられるか確認
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-affiysan} -d ${POSTGRES_DB:-affiysan_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-affistant} -d ${POSTGRES_DB:-affistant_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7
-    container_name: affiysan_redis
+    container_name: affistant_redis # 修正
     ports:
       - "6379:6379"
     healthcheck:
-      # Redisがpingに応答するか確認
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # --- ▼ Celeryタスク実行用ワーカー ▼ ---
   celery_worker:
     build: ./backend
-    container_name: affiysan_celery_worker
+    container_name: affistant_celery_worker # 修正
     working_dir: /app
-    # Celeryワーカーを起動 (affiysan_core は settings.py があるプロジェクト名)
-    command: celery -A affiysan_core worker --loglevel=info
+    command: celery -A affistant_core worker --loglevel=info
     volumes:
       - ./backend:/app
     env_file:
@@ -81,13 +77,11 @@ services:
       redis:
         condition: service_healthy
 
-  # --- ▼ Celery定期タスク実行用スケジューラ ▼ ---
   celery_beat:
     build: ./backend
-    container_name: affiysan_celery_beat
+    container_name: affistant_celery_beat # 修正
     working_dir: /app
-    # Celery Beat (スケジューラ) を起動
-    command: celery -A affiysan_core beat --loglevel=info
+    command: celery -A affistant_core beat --loglevel=info
     volumes:
       - ./backend:/app
     env_file:

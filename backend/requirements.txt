@@ -9,3 +9,4 @@ drf-spectacular
 drf-spectacular-sidecar  # Swagger UI/Redocを同梱
 requests
 beautifulsoup4
+openpyxl

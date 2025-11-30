@@ -3,7 +3,7 @@ from django.http import JsonResponse
 
 
 def health_check(request):
-    return JsonResponse({"status": "ok", "service": "affiysan-api"})
+    return JsonResponse({"status": "ok", "service": "affistant-api"})
 
 
 urlpatterns = [

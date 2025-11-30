@@ -1,13 +1,29 @@
+/* Tailwind CSSの基本的なディレクティブをインポートします */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* その他のグローバルスタイル (例: bodyのデフォルト背景色など) */
 body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* App.jsx側でも設定していますが、保険として設定 */
+  background-color: #111827;
+  /* bg-gray-900 */
+  color: #f3f4f6;
+  /* text-gray-100 */
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+/* 数値入力のスピナー（増減ボタン）を非表示にするユーティリティ */
+@layer utilities {
+
+  /* Chrome, Safari, Edge, Opera */
+  .no-spinner::-webkit-outer-spin-button,
+  .no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  /* Firefox */
+  .no-spinner {
+    -moz-appearance: textfield;
+  }
 }

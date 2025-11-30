@@ -31,7 +31,8 @@ class MediaSiteSerializer(serializers.ModelSerializer):
 class ExtractionRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExtractionRun
-        fields = ["id", "project", "max_rank", "executed_at"]
+        # 修正: 'status' フィールドを追加し、フロントエンドに状態を返すように変更
+        fields = ["id", "project", "max_rank", "executed_at", "status"]
 
 
 class AffiliateLinkSerializer(serializers.ModelSerializer):
