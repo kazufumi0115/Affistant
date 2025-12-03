@@ -80,6 +80,7 @@ def search_google(keyword, max_rank=10):
                 # ★修正点2: start_indexに依存せず、カウンタを使って順位を振る
                 rank = current_rank_counter
 
+                # 指定した最大順位を超えたら終了
                 if rank > max_rank:
                     break
 
@@ -92,7 +93,7 @@ def search_google(keyword, max_rank=10):
                     }
                 )
 
-                # 次の順位へ
+                # 次の順位へカウントアップ
                 current_rank_counter += 1
 
             # 検索結果が10件未満なら、これ以上ページがないか、最後まで取得したとみなして終了
