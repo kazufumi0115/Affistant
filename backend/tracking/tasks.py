@@ -25,44 +25,38 @@ ASP_DOMAINS = {
 
 
 def get_search_hit_count(soup):
-    """
-    Google検索結果ページからヒット件数（約xxx件）を抽出する
-    セレクタの種類を増やして対応力を強化
-    """
+    """Google検索結果ページからヒット件数を抽出"""
     try:
-        # パターン1: ID指定
         result_stats = soup.select_one("#result-stats")
         if result_stats:
             text = result_stats.get_text()
             match = re.search(r"([\d,]+)", text)
             if match:
                 return int(match.group(1).replace(",", ""))
-
-        # パターン2: 特定のクラスや構造 (Googleの仕様変更対策)
-        # 必要に応じて追加
     except Exception:
         pass
     return None
 
 
 def search_google(keyword, max_rank=10):
-    """
-    Google検索を実行する
-    """
-    # ヘッダーをより一般的なブラウザに偽装
+    """Google検索を実行"""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Cache-Control": "max-age=0",
     }
 
     search_url = "https://www.google.co.jp/search"
-    params = {"q": keyword, "num": max_rank + 20, "hl": "ja", "gl": "jp", "ie": "UTF-8", "oe": "UTF-8"}  # 多めに取得
+    params = {
+        "q": keyword,
+        "num": max_rank + 20,  # 余分に取得
+        "hl": "ja",
+        "gl": "jp",
+    }
 
     try:
         print(f"Connecting to Google for '{keyword}'...")
-        time.sleep(random.uniform(5, 10))  # ブロック回避のため長めに待機
+        time.sleep(random.uniform(5, 10))
 
         response = requests.get(search_url, headers=headers, params=params, timeout=30)
 
@@ -74,22 +68,26 @@ def search_google(keyword, max_rank=10):
         hit_count = get_search_hit_count(soup)
         results = []
 
-        search_items = soup.select("div.g")
-        if not search_items:
-            search_items = soup.select("div.MjjYud")
+        # Google検索結果のセレクタ (div.g または div.MjjYud)
+        search_items = []
+        main_column = soup.select_one("#search")
+        if main_column:
+            all_links = main_column.find_all("a")
 
-        current_rank = 1
-        for item in search_items:
-            if current_rank > max_rank:
-                break
+            current_rank = 1
+            for link in all_links:
+                if current_rank > max_rank:
+                    break
 
-            title_tag = item.select_one("h3")
-            if not title_tag:
-                continue
+                h3 = link.find("h3")
+                if not h3:
+                    # 親要素がh3かチェック
+                    if link.parent.name == "h3":
+                        h3 = link.parent
+                    else:
+                        continue
 
-            link_tag = title_tag.find_parent("a")
-            if link_tag:
-                href = link_tag.get("href")
+                href = link.get("href")
 
                 if not href or not href.startswith("http"):
                     continue
@@ -102,7 +100,7 @@ def search_google(keyword, max_rank=10):
                     else:
                         continue
 
-                title = title_tag.get_text(strip=True)
+                title = h3.get_text(strip=True)
 
                 if any(r["url"] == href for r in results):
                     continue
@@ -117,82 +115,15 @@ def search_google(keyword, max_rank=10):
         return None
 
 
-def search_duckduckgo(keyword, max_rank=10):
-    """
-    DuckDuckGo検索 (フォールバック)
-    """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    # html.duckduckgo.com を使用 (JSなしで解析しやすい)
-    url = "https://html.duckduckgo.com/html/"
-    data = {"q": keyword}
-
-    try:
-        print(f"Connecting to DuckDuckGo for '{keyword}'...")
-        time.sleep(random.uniform(3, 6))
-        response = requests.post(url, data=data, headers=headers, timeout=30)
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        results = []
-
-        # DuckDuckGo HTML版の結果セレクタ
-        result_divs = soup.select("div.result")
-
-        current_rank = 1
-        for div in result_divs:
-            if current_rank > max_rank:
-                break
-
-            # 広告クラスの除外
-            if "result--ad" in div.get("class", []):
-                continue
-
-            link_tag = div.select_one("a.result__a")
-            if link_tag:
-                href = link_tag.get("href")
-
-                # === 広告URL・トラッキングURLの除外 ===
-                if "duckduckgo.com/y.js" in href or "ad_provider" in href:
-                    continue
-
-                # URLデコード
-                if "/l/?uddg=" in href:
-                    parsed = urlparse(href)
-                    qs = parse_qs(parsed.query)
-                    if "uddg" in qs:
-                        href = qs["uddg"][0]
-
-                # デコード後もduckduckgoドメインなら除外 (内部リンク等)
-                if "duckduckgo.com" in href:
-                    continue
-
-                if not href.startswith("http"):
-                    continue
-
-                title = link_tag.get_text(strip=True)
-
-                if any(r["url"] == href for r in results):
-                    continue
-
-                results.append({"rank": current_rank, "title": title, "url": href})
-                current_rank += 1
-
-        return {"results": results, "hit_count": None}
-    except Exception as e:
-        print(f"DuckDuckGo Search Error: {e}")
-        return None
-
-
 def extract_affiliate_links_from_url(article_url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
     found_links = []
 
     try:
         time.sleep(random.uniform(1, 2))
-        response = requests.get(article_url, headers=headers, timeout=15)  # タイムアウトを少し延長
+        response = requests.get(article_url, headers=headers, timeout=15)
         response.encoding = response.apparent_encoding
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -232,16 +163,11 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
         print(f"Task started: {keyword.text}")
 
-        # 1. Google検索を試行
+        # Google検索のみ実行
         search_data = search_google(keyword.text, max_rank=run.max_rank)
 
-        # 2. Google失敗時はDuckDuckGoへフォールバック
         if not search_data or not search_data["results"]:
-            print("Google failed/blocked. Retrying with DuckDuckGo...")
-            search_data = search_duckduckgo(keyword.text, max_rank=run.max_rank)
-
-        if not search_data or not search_data["results"]:
-            print(f"All search attempts failed for '{keyword.text}'")
+            print(f"Google search failed for '{keyword.text}'")
             dummy_site, _ = MediaSite.objects.get_or_create(domain="not_found", defaults={"name": "検索結果なし"})
             SearchResult.objects.create(
                 run=run,
@@ -249,10 +175,9 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
                 media_site=dummy_site,
                 rank=0,
                 page_url="",
-                title="検索結果が見つかりませんでした",
+                title="検索結果が見つかりませんでした (Google Blocked)",
             )
         else:
-            # ヒット数があれば保存 (Google検索成功時のみ)
             if search_data.get("hit_count"):
                 keyword.search_volume = search_data["hit_count"]
                 keyword.save()
@@ -264,7 +189,7 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
                 parsed_url = urlparse(data["url"])
                 domain = parsed_url.netloc
 
-                media_site, _ = MediaSite.objects.get_or_create(domain=domain, defaults={"name": f"{domain} メディア"})
+                media_site, _ = MediaSite.objects.get_or_create(domain=domain, defaults={"name": f"{domain}"})
 
                 search_result, created = SearchResult.objects.update_or_create(
                     run=run,
@@ -273,7 +198,7 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
                     defaults={"rank": data["rank"], "page_url": data["url"], "title": data["title"]},
                 )
 
-                # 指定順位まですべてアフィリエイトリンク抽出
+                # 指定順位までアフィリエイトリンク抽出
                 if data["rank"] <= run.max_rank:
                     affiliate_links_data = extract_affiliate_links_from_url(data["url"])
                     AffiliateLink.objects.filter(search_result=search_result).delete()
@@ -294,7 +219,7 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
             run.save()
             print(f"Run {run_id} COMPLETED.")
 
-        return f"Success: {keyword.text} ({len(search_data['results']) if search_data else 0} results)"
+        return f"Success: {keyword.text}"
 
     except Exception as e:
         print(f"Task failed: {e}")

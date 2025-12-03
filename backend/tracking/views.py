@@ -1,10 +1,11 @@
 import csv
-import openpyxl  # Excel生成用
+import openpyxl
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from urllib.parse import urlparse
 from .models import Genre, Project, Keyword, MediaSite, ExtractionRun, SearchResult
 from .serializers import (
     GenreSerializer,
@@ -39,8 +40,6 @@ class ProjectViewSet(BaseOwnerViewSet):
     @action(detail=True, methods=["post"])
     def extract(self, request, pk=None):
         project = self.get_object()
-
-        # 1. キーワード登録
         raw_keywords = request.data.get("keywords", "")
         max_rank = request.data.get("max_rank", 10)
 
@@ -49,16 +48,11 @@ class ProjectViewSet(BaseOwnerViewSet):
             for k_text in keyword_list:
                 Keyword.objects.get_or_create(project=project, text=k_text)
 
-        # 2. キーワード取得
         keywords = project.keywords.all()
-
         if not keywords.exists():
             return Response({"error": "キーワードが登録されていません。"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. 実行履歴作成
         run = ExtractionRun.objects.create(project=project, status="pending", max_rank=max_rank)
-
-        # 4. タスク実行
         for keyword in keywords:
             enqueue_extraction_for_keyword.delay(run.id, keyword.id)
 
@@ -72,6 +66,57 @@ class ProjectViewSet(BaseOwnerViewSet):
             status=status.HTTP_202_ACCEPTED,
         )
 
+    # --- 共通のデータ行生成ロジック ---
+    def _generate_rows(self, project):
+        results = (
+            SearchResult.objects.filter(run__project=project, rank__gt=0)
+            .select_related("keyword", "run", "media_site")
+            .prefetch_related("affiliate_links")
+            .order_by("-run__executed_at", "keyword__text", "rank")
+        )
+
+        rows = []
+        for result in results:
+            # メディア名: トップドメインのみ抽出
+            domain = result.media_site.domain
+            # "www." などを除去してきれいにする場合
+            if domain.startswith("www."):
+                domain = domain[4:]
+
+            # アフィリエイトリンク情報の整理
+            aff_links = result.affiliate_links.all()
+            has_affiliate = aff_links.exists()
+            media_type = "アフィリエイトメディア" if has_affiliate else "その他"
+
+            # 提携ASP一覧 (重複排除)
+            asp_set = set(link.asp_name for link in aff_links if link.asp_name)
+            asp_list_str = ", ".join(asp_set) if asp_set else ""
+
+            local_executed_at = timezone.localtime(result.run.executed_at)
+
+            row = [
+                local_executed_at.strftime("%Y-%m-%d %H:%M"),  # A: 検索日時
+                result.keyword.text,  # B: キーワード
+                result.keyword.search_volume or 0,  # C: 月間検索ボリューム
+                domain,  # D: メディア名(トップドメイン)
+                result.rank,  # E: SEO順位
+                result.title,  # F: 記事名
+                result.page_url,  # G: 掲載記事リンク
+                media_type,  # H: メディア種類
+                asp_list_str,  # I: 提携ASP
+            ]
+
+            # リンク列 (トップ10まで)
+            for i in range(10):
+                if i < len(aff_links):
+                    row.append(aff_links[i].link_url)
+                else:
+                    row.append("")  # 空埋め
+
+            rows.append(row)
+        return rows
+
+    # --- CSV出力 ---
     @action(detail=True, methods=["get"])
     def export_csv(self, request, pk=None):
         project = self.get_object()
@@ -81,49 +126,29 @@ class ProjectViewSet(BaseOwnerViewSet):
         response["Content-Disposition"] = f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
 
         writer = csv.writer(response)
+        # ヘッダー作成
         header = [
+            "検索日時",
             "キーワード",
             "月間検索ボリューム",
-            "検索日時",
             "メディア名",
             "SEO順位",
+            "記事名",
             "掲載記事リンク",
-            "アフィリエイトリンク詳細",
+            "メディア種類",
+            "提携ASP",
         ]
+        # リンク1〜リンク10を追加
+        header.extend([f"リンク{i+1}" for i in range(10)])
         writer.writerow(header)
 
-        results = (
-            SearchResult.objects.filter(run__project=project, rank__gt=0)
-            .select_related("keyword", "run", "media_site")
-            .prefetch_related("affiliate_links")
-            .order_by("-run__executed_at", "keyword__text", "rank")
-        )
-
-        for result in results:
-            aff_links_list = []
-            for link in result.affiliate_links.all():
-                asp = link.asp_name or "不明"
-                product = link.product_name or "不明"
-                aff_links_list.append(f"[{asp}: {product}] {link.link_url}")
-
-            aff_links_text = "\n".join(aff_links_list) if aff_links_list else "なし"
-
-            local_executed_at = timezone.localtime(result.run.executed_at)
-
-            row = [
-                result.keyword.text,
-                result.keyword.search_volume or 0,
-                local_executed_at.strftime("%Y-%m-%d %H:%M"),
-                result.media_site.name or result.media_site.domain,
-                result.rank,
-                result.page_url,
-                aff_links_text,
-            ]
+        rows = self._generate_rows(project)
+        for row in rows:
             writer.writerow(row)
 
         return response
 
-    # === Excel出力機能 ===
+    # --- Excel出力 ---
     @action(detail=True, methods=["get"])
     def export_excel(self, request, pk=None):
         project = self.get_object()
@@ -137,43 +162,21 @@ class ProjectViewSet(BaseOwnerViewSet):
         ws.title = "SEO Results"
 
         header = [
+            "検索日時",
             "キーワード",
             "月間検索ボリューム",
-            "検索日時",
             "メディア名",
             "SEO順位",
+            "記事名",
             "掲載記事リンク",
-            "アフィリエイトリンク詳細",
+            "メディア種類",
+            "提携ASP",
         ]
+        header.extend([f"リンク{i+1}" for i in range(10)])
         ws.append(header)
 
-        results = (
-            SearchResult.objects.filter(run__project=project, rank__gt=0)
-            .select_related("keyword", "run", "media_site")
-            .prefetch_related("affiliate_links")
-            .order_by("-run__executed_at", "keyword__text", "rank")
-        )
-
-        for result in results:
-            aff_links_list = []
-            for link in result.affiliate_links.all():
-                asp = link.asp_name or "不明"
-                product = link.product_name or "不明"
-                aff_links_list.append(f"[{asp}: {product}] {link.link_url}")
-
-            aff_links_text = "\n".join(aff_links_list) if aff_links_list else "なし"
-
-            local_executed_at = timezone.localtime(result.run.executed_at)
-
-            row = [
-                result.keyword.text,
-                result.keyword.search_volume or 0,
-                local_executed_at.strftime("%Y-%m-%d %H:%M"),
-                result.media_site.name or result.media_site.domain,
-                result.rank,
-                result.page_url,
-                aff_links_text,
-            ]
+        rows = self._generate_rows(project)
+        for row in rows:
             ws.append(row)
 
         wb.save(response)
@@ -184,11 +187,10 @@ class ProjectViewSet(BaseOwnerViewSet):
         project = self.get_object()
         run_count = project.runs.count()
         project.runs.all().delete()
-
         return Response({"message": f"{run_count}件の検索履歴を削除しました。"}, status=status.HTTP_200_OK)
 
 
-# ... (KeywordViewSet等は変更なし) ...
+# ... (以下、他のViewSetは変更なし) ...
 class KeywordViewSet(viewsets.ModelViewSet):
     queryset = Keyword.objects.all()
     serializer_class = KeywordSerializer
