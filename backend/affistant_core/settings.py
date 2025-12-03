@@ -161,3 +161,7 @@ SPECTACULAR_SETTINGS = {
 # === カスタムユーザーモデルの設定 ===
 # Djangoに対して、このモデルを認証に使用するように指示
 AUTH_USER_MODEL = "users.User"
+
+# Google Custom Search API
+GOOGLE_CSE_API_KEY = env("GOOGLE_CSE_API_KEY", default="")
+GOOGLE_CSE_ID = env("GOOGLE_CSE_ID", default="")

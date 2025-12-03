@@ -69,7 +69,7 @@ class ProjectViewSet(BaseOwnerViewSet):
     # --- 共通のデータ行生成ロジック ---
     def _generate_rows(self, project):
         results = (
-            SearchResult.objects.filter(run__project=project, rank__gt=0)
+            SearchResult.objects.filter(run__project=project)
             .select_related("keyword", "run", "media_site")
             .prefetch_related("affiliate_links")
             .order_by("-run__executed_at", "keyword__text", "rank")
@@ -77,6 +77,8 @@ class ProjectViewSet(BaseOwnerViewSet):
 
         rows = []
         for result in results:
+            display_rank = result.rank if result.rank > 0 else "取得失敗"
+
             # メディア名: トップドメインのみ抽出
             domain = result.media_site.domain
             # "www." などを除去してきれいにする場合
@@ -99,7 +101,7 @@ class ProjectViewSet(BaseOwnerViewSet):
                 result.keyword.text,  # B: キーワード
                 result.keyword.search_volume or 0,  # C: 月間検索ボリューム
                 domain,  # D: メディア名(トップドメイン)
-                result.rank,  # E: SEO順位
+                display_rank,  # E: SEO順位
                 result.title,  # F: 記事名
                 result.page_url,  # G: 掲載記事リンク
                 media_type,  # H: メディア種類

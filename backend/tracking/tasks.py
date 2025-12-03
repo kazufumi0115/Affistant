@@ -4,10 +4,12 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import random
-import re
-from urllib.parse import urlparse, parse_qs, unquote
 
-# ASPドメインリスト
+# 設定ファイルを読み込み
+from django.conf import settings
+from urllib.parse import urlparse
+
+# ASPドメインリスト (変更なし)
 ASP_DOMAINS = {
     "a8.net": "A8.net",
     "valuecommerce.com": "ValueCommerce",
@@ -24,98 +26,83 @@ ASP_DOMAINS = {
 }
 
 
-def get_search_hit_count(soup):
-    """Google検索結果ページからヒット件数を抽出"""
-    try:
-        result_stats = soup.select_one("#result-stats")
-        if result_stats:
-            text = result_stats.get_text()
-            match = re.search(r"([\d,]+)", text)
-            if match:
-                return int(match.group(1).replace(",", ""))
-    except Exception:
-        pass
-    return None
-
-
 def search_google(keyword, max_rank=10):
-    """Google検索を実行"""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-    }
+    """
+    Google Custom Search APIを使用して検索を実行する
+    """
+    api_key = settings.GOOGLE_CSE_API_KEY
+    cse_id = settings.GOOGLE_CSE_ID
 
-    search_url = "https://www.google.co.jp/search"
-    params = {
-        "q": keyword,
-        "num": max_rank + 20,  # 余分に取得
-        "hl": "ja",
-        "gl": "jp",
-    }
+    if not api_key or not cse_id:
+        print("Error: Google API Key or CSE ID is not configured.")
+        return None
 
-    try:
-        print(f"Connecting to Google for '{keyword}'...")
-        time.sleep(random.uniform(5, 10))
+    url = "https://www.googleapis.com/customsearch/v1"
+    all_results = []
+    total_hit_count = 0
 
-        response = requests.get(search_url, headers=headers, params=params, timeout=30)
+    # APIは1回で最大10件取得。max_rankまでループで取得する
+    # startは 1, 11, 21... と増える
+    for start_index in range(1, max_rank + 1, 10):
+        params = {
+            "key": api_key,
+            "cx": cse_id,
+            "q": keyword,
+            "num": 10,  # 1リクエストあたりの最大件数
+            "start": start_index,
+            "gl": "jp",  # 地域: 日本
+            "hl": "ja",  # 言語: 日本語
+        }
 
-        if response.status_code != 200:
-            print(f"Google Search Failed: Status {response.status_code}")
-            return None
+        try:
+            print(f"API Request: {keyword} (start={start_index})...")
+            response = requests.get(url, params=params, timeout=30)
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        hit_count = get_search_hit_count(soup)
-        results = []
+            if response.status_code != 200:
+                print(f"Google API Error: {response.status_code} - {response.text}")
+                break
 
-        # Google検索結果のセレクタ (div.g または div.MjjYud)
-        search_items = []
-        main_column = soup.select_one("#search")
-        if main_column:
-            all_links = main_column.find_all("a")
+            data = response.json()
 
-            current_rank = 1
-            for link in all_links:
-                if current_rank > max_rank:
+            # ヒット件数の取得（最初のページのときだけ取得）
+            if start_index == 1 and "searchInformation" in data:
+                total_results_str = data["searchInformation"].get("totalResults", "0")
+                total_hit_count = int(total_results_str)
+
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for i, item in enumerate(items):
+                rank = start_index + i
+                if rank > max_rank:
                     break
 
-                h3 = link.find("h3")
-                if not h3:
-                    # 親要素がh3かチェック
-                    if link.parent.name == "h3":
-                        h3 = link.parent
-                    else:
-                        continue
+                all_results.append(
+                    {
+                        "rank": rank,
+                        "title": item.get("title"),
+                        "url": item.get("link"),
+                        "snippet": item.get("snippet"),  # APIではスニペットも簡単に取れます
+                    }
+                )
 
-                href = link.get("href")
+            # 検索結果が10件未満なら、これ以上ページがないので終了
+            if len(items) < 10:
+                break
 
-                if not href or not href.startswith("http"):
-                    continue
-                if "google.com" in href or "google.co.jp" in href:
-                    if "/url?q=" in href:
-                        parsed = urlparse(href)
-                        qs = parse_qs(parsed.query)
-                        if "q" in qs:
-                            href = qs["q"][0]
-                    else:
-                        continue
+            # APIへの負荷軽減のため少し待機（短くてOK）
+            time.sleep(0.5)
 
-                title = h3.get_text(strip=True)
+        except Exception as e:
+            print(f"API Execution Error: {e}")
+            break
 
-                if any(r["url"] == href for r in results):
-                    continue
-
-                results.append({"rank": current_rank, "title": title, "url": href})
-                current_rank += 1
-
-        return {"results": results, "hit_count": hit_count}
-
-    except Exception as e:
-        print(f"Google Search Error: {e}")
-        return None
+    return {"results": all_results, "hit_count": total_hit_count}
 
 
 def extract_affiliate_links_from_url(article_url):
+    # === 変更なし (既存のまま) ===
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
@@ -153,6 +140,7 @@ def extract_affiliate_links_from_url(article_url):
 
 @shared_task(bind=True)
 def enqueue_extraction_for_keyword(self, run_id, keyword_id):
+    # === 既存のロジックとほぼ同じだが、search_googleの戻り値処理を合わせる ===
     try:
         run = ExtractionRun.objects.get(id=run_id)
         keyword = Keyword.objects.get(id=keyword_id)
@@ -163,19 +151,22 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
         print(f"Task started: {keyword.text}")
 
-        # Google検索のみ実行
+        # ★ ここでAPI版の関数が呼ばれます
         search_data = search_google(keyword.text, max_rank=run.max_rank)
 
         if not search_data or not search_data["results"]:
-            print(f"Google search failed for '{keyword.text}'")
+            print(f"Google search failed or no results for '{keyword.text}'")
             dummy_site, _ = MediaSite.objects.get_or_create(domain="not_found", defaults={"name": "検索結果なし"})
+            # 結果が見つからない場合でも、APIエラーなどでなければ空の結果として保存するか、
+            # APIエラーの場合は保存しないか選択できます。
+            # ここでは「検索結果0件」として記録します。
             SearchResult.objects.create(
                 run=run,
                 keyword=keyword,
                 media_site=dummy_site,
                 rank=0,
                 page_url="",
-                title="検索結果が見つかりませんでした (Google Blocked)",
+                title="検索結果なし (API)",
             )
         else:
             if search_data.get("hit_count"):
@@ -183,7 +174,7 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
                 keyword.save()
 
             results_list = search_data["results"]
-            print(f"Found {len(results_list)} results.")
+            print(f"Found {len(results_list)} results via API.")
 
             for data in results_list:
                 parsed_url = urlparse(data["url"])
@@ -200,6 +191,8 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
                 # 指定順位までアフィリエイトリンク抽出
                 if data["rank"] <= run.max_rank:
+                    # 記事詳細のスクレイピングは引き続き requests + BS4 で行います
+                    # ここはGoogleではないのでブロックのリスクは低いです
                     affiliate_links_data = extract_affiliate_links_from_url(data["url"])
                     AffiliateLink.objects.filter(search_result=search_result).delete()
                     for aff_data in affiliate_links_data:
@@ -223,4 +216,5 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
     except Exception as e:
         print(f"Task failed: {e}")
+        # エラー時はRun自体をFailedにするなどの処理も検討可
         return f"Error: {str(e)}"
