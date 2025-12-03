@@ -41,8 +41,11 @@ def search_google(keyword, max_rank=10):
     all_results = []
     total_hit_count = 0
 
+    # ★修正点1: 通し番号用の変数を定義
+    current_rank_counter = 1
+
     # APIは1回で最大10件取得。max_rankまでループで取得する
-    # startは 1, 11, 21... と増える
+    # startは 1, 11, 21... と増える (これはAPIの仕様通り)
     for start_index in range(1, max_rank + 1, 10):
         params = {
             "key": api_key,
@@ -73,8 +76,10 @@ def search_google(keyword, max_rank=10):
             if not items:
                 break
 
-            for i, item in enumerate(items):
-                rank = start_index + i
+            for item in items:
+                # ★修正点2: start_indexに依存せず、カウンタを使って順位を振る
+                rank = current_rank_counter
+
                 if rank > max_rank:
                     break
 
@@ -83,15 +88,22 @@ def search_google(keyword, max_rank=10):
                         "rank": rank,
                         "title": item.get("title"),
                         "url": item.get("link"),
-                        "snippet": item.get("snippet"),  # APIではスニペットも簡単に取れます
+                        "snippet": item.get("snippet"),
                     }
                 )
 
-            # 検索結果が10件未満なら、これ以上ページがないので終了
+                # 次の順位へ
+                current_rank_counter += 1
+
+            # 検索結果が10件未満なら、これ以上ページがないか、最後まで取得したとみなして終了
             if len(items) < 10:
                 break
 
-            # APIへの負荷軽減のため少し待機（短くてOK）
+            # もし既に目標順位まで達していたら終了
+            if current_rank_counter > max_rank:
+                break
+
+            # APIへの負荷軽減のため少し待機
             time.sleep(0.5)
 
         except Exception as e:
@@ -140,7 +152,7 @@ def extract_affiliate_links_from_url(article_url):
 
 @shared_task(bind=True)
 def enqueue_extraction_for_keyword(self, run_id, keyword_id):
-    # === 既存のロジックとほぼ同じだが、search_googleの戻り値処理を合わせる ===
+    # === 変更なし (既存のまま) ===
     try:
         run = ExtractionRun.objects.get(id=run_id)
         keyword = Keyword.objects.get(id=keyword_id)
@@ -151,15 +163,13 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
         print(f"Task started: {keyword.text}")
 
-        # ★ ここでAPI版の関数が呼ばれます
+        # API検索実行
         search_data = search_google(keyword.text, max_rank=run.max_rank)
 
         if not search_data or not search_data["results"]:
             print(f"Google search failed or no results for '{keyword.text}'")
             dummy_site, _ = MediaSite.objects.get_or_create(domain="not_found", defaults={"name": "検索結果なし"})
-            # 結果が見つからない場合でも、APIエラーなどでなければ空の結果として保存するか、
-            # APIエラーの場合は保存しないか選択できます。
-            # ここでは「検索結果0件」として記録します。
+
             SearchResult.objects.create(
                 run=run,
                 keyword=keyword,
@@ -195,8 +205,6 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
                 # 指定順位までアフィリエイトリンク抽出
                 if data["rank"] <= run.max_rank:
-                    # 記事詳細のスクレイピングは引き続き requests + BS4 で行います
-                    # ここはGoogleではないのでブロックのリスクは低いです
                     affiliate_links_data = extract_affiliate_links_from_url(data["url"])
                     AffiliateLink.objects.filter(search_result=search_result).delete()
                     for aff_data in affiliate_links_data:
@@ -220,5 +228,4 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
 
     except Exception as e:
         print(f"Task failed: {e}")
-        # エラー時はRun自体をFailedにするなどの処理も検討可
         return f"Error: {str(e)}"
