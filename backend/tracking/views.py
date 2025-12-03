@@ -67,7 +67,7 @@ class ProjectViewSet(BaseOwnerViewSet):
         )
 
     # --- 共通のデータ行生成ロジック ---
-    def _generate_rows(self, project):
+def _generate_rows(self, project):
         results = (
             SearchResult.objects.filter(run__project=project)
             .select_related("keyword", "run", "media_site")
