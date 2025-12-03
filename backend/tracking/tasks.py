@@ -185,8 +185,12 @@ def enqueue_extraction_for_keyword(self, run_id, keyword_id):
                 search_result, created = SearchResult.objects.update_or_create(
                     run=run,
                     keyword=keyword,
-                    media_site=media_site,
-                    defaults={"rank": data["rank"], "page_url": data["url"], "title": data["title"]},
+                    rank=data["rank"],
+                    defaults={
+                        "media_site": media_site,
+                        "page_url": data["url"],
+                        "title": data["title"],
+                    },
                 )
 
                 # 指定順位までアフィリエイトリンク抽出

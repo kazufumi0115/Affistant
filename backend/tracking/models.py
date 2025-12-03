@@ -118,6 +118,10 @@ class SearchResult(models.Model):
     def __str__(self):
         return f"[{self.rank}位] {self.keyword.text} - {self.media_site.domain}"
 
+    class Meta:
+        unique_together = ("run", "keyword", "rank")
+        ordering = ["rank"]
+
 
 class AffiliateLink(models.Model):
     """
