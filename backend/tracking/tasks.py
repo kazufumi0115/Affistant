@@ -11,18 +11,20 @@ from urllib.parse import urlparse
 
 # ASPドメインリスト (変更なし)
 ASP_DOMAINS = {
-    "a8.net": "A8.net",
-    "valuecommerce.com": "ValueCommerce",
-    "accesstrade.net": "AccessTrade",
-    "moshimo.com": "Moshimo",
-    "rentracks.jp": "Rentracks",
-    "felmat.net": "felmat",
-    "afb.jp": "afb",
-    "linkshare.ne.jp": "LinkShare",
-    "amazon.co.jp": "Amazon",
-    "rakuten.co.jp": "Rakuten",
-    "presco.jp": "Presco",
-    "xmax.jp": "XMAX",
+    "a8.net": "A8",
+    "afi-b": "afb",
+    "affiliate-b": "afb",
+    "valuecommerce": "ValueCommerce",
+    "accesstrade": "AccessTrade",
+    "rentracks": "Rentracks",
+    "felmat": "Felmat",
+    "moshimo": "もしも",
+    "medipartner": "MediPartner",
+    "zucks": "Zucks Affiliate",
+    "j-a-net": "JANet",
+    "ad-track": "アドトラック",
+    "affitown": "affitown",
+    "presco": "Presco",
 }
 
 
@@ -41,11 +43,10 @@ def search_google(keyword, max_rank=10):
     all_results = []
     total_hit_count = 0
 
-    # ★修正点1: 通し番号用の変数を定義
+    # 通し番号用の変数を定義
     current_rank_counter = 1
 
     # APIは1回で最大10件取得。max_rankまでループで取得する
-    # startは 1, 11, 21... と増える (これはAPIの仕様通り)
     for start_index in range(1, max_rank + 1, 10):
         params = {
             "key": api_key,
@@ -67,7 +68,7 @@ def search_google(keyword, max_rank=10):
 
             data = response.json()
 
-            # ヒット件数の取得（最初のページのときだけ取得）
+            # ヒット件数の取得
             if start_index == 1 and "searchInformation" in data:
                 total_results_str = data["searchInformation"].get("totalResults", "0")
                 total_hit_count = int(total_results_str)
@@ -77,10 +78,8 @@ def search_google(keyword, max_rank=10):
                 break
 
             for item in items:
-                # ★修正点2: start_indexに依存せず、カウンタを使って順位を振る
                 rank = current_rank_counter
 
-                # 指定した最大順位を超えたら終了
                 if rank > max_rank:
                     break
 
@@ -93,18 +92,14 @@ def search_google(keyword, max_rank=10):
                     }
                 )
 
-                # 次の順位へカウントアップ
                 current_rank_counter += 1
 
-            # 検索結果が10件未満なら、これ以上ページがないか、最後まで取得したとみなして終了
             if len(items) < 10:
                 break
 
-            # もし既に目標順位まで達していたら終了
             if current_rank_counter > max_rank:
                 break
 
-            # APIへの負荷軽減のため少し待機
             time.sleep(0.5)
 
         except Exception as e:
@@ -115,7 +110,6 @@ def search_google(keyword, max_rank=10):
 
 
 def extract_affiliate_links_from_url(article_url):
-    # === 変更なし (既存のまま) ===
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
@@ -132,8 +126,8 @@ def extract_affiliate_links_from_url(article_url):
             if not href or not href.startswith("http"):
                 continue
 
-            for asp_domain, asp_name in ASP_DOMAINS.items():
-                if asp_domain in href:
+            for asp_key, asp_name in ASP_DOMAINS.items():
+                if asp_key in href:
                     product_name = a_tag.get_text(strip=True)
                     if not product_name:
                         img = a_tag.find("img")
@@ -153,7 +147,6 @@ def extract_affiliate_links_from_url(article_url):
 
 @shared_task(bind=True)
 def enqueue_extraction_for_keyword(self, run_id, keyword_id):
-    # === 変更なし (既存のまま) ===
     try:
         run = ExtractionRun.objects.get(id=run_id)
         keyword = Keyword.objects.get(id=keyword_id)

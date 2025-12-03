@@ -96,10 +96,11 @@ class ProjectViewSet(BaseOwnerViewSet):
 
             local_executed_at = timezone.localtime(result.run.executed_at)
 
+            # --- 修正: 月間検索ボリュームのカラムを削除 ---
             row = [
                 local_executed_at.strftime("%Y-%m-%d %H:%M"),  # A: 検索日時
                 result.keyword.text,  # B: キーワード
-                result.keyword.search_volume or 0,  # C: 月間検索ボリューム
+                # result.keyword.search_volume or 0,  # C: 月間検索ボリューム (削除)
                 domain,  # D: メディア名(トップドメイン)
                 display_rank,  # E: SEO順位
                 result.title,  # F: 記事名
@@ -129,10 +130,11 @@ class ProjectViewSet(BaseOwnerViewSet):
 
         writer = csv.writer(response)
         # ヘッダー作成
+        # --- 修正: 月間検索ボリュームを削除 ---
         header = [
             "検索日時",
             "キーワード",
-            "月間検索ボリューム",
+            # "月間検索ボリューム", (削除)
             "メディア名",
             "SEO順位",
             "記事名",
@@ -163,10 +165,11 @@ class ProjectViewSet(BaseOwnerViewSet):
         ws = wb.active
         ws.title = "SEO Results"
 
+        # --- 修正: 月間検索ボリュームを削除 ---
         header = [
             "検索日時",
             "キーワード",
-            "月間検索ボリューム",
+            # "月間検索ボリューム", (削除)
             "メディア名",
             "SEO順位",
             "記事名",
